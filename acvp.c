@@ -381,6 +381,41 @@ ACVP_RESULT acvp_set_certkey(ACVP_CTX *ctx, char *cert_file, char *key_file)
 }
 
 /*
+ * This function is used to set the vendor information for
+ * a given session.
+ */
+void acvp_set_vendor_info(JSON_Object *object, char *vendor_name, char *vendor_url, char *contact, char *contact_email)
+{
+	json_object_set_string(object, "vendor_name", vendor_name);
+	json_object_set_string(object, "vendor_url", vendor_url);
+	json_object_set_string(object, "contact", contact);
+	json_object_set_string(object, "contact_email", contact_email);
+}
+
+/*
+ * This function is used to set the module information for
+ * a given session.
+ */
+void acvp_set_module_info(JSON_Object *object, char *module_name, char *module_type, char *module_desc)
+{
+	json_object_set_string(object, "module_name", module_name);
+	json_object_set_string(object, "module_type", module_type);
+	json_object_set_string(object, "implementation_description", module_desc);
+}
+
+/*
+ * This function is used to set the operational environment for
+ * a given session.
+ */
+void acvp_set_op_env(JSON_Object *object, char *module_version, char *processor, char *op_system, JSON_Value *op_env)
+{
+	json_object_set_string(object, "module_version", module_version);
+	json_object_set_string(object, "processor", processor);
+	json_object_set_string(object, "operating_system", op_system);
+	json_object_set_value(object, "operational_environment", op_env);
+}
+
+/*
  * This function builds the JSON register message that
  * will be sent to the ACVP server to advertised the crypto
  * capabilities of the module under test.
@@ -410,22 +445,14 @@ static ACVP_RESULT acvp_build_register(ACVP_CTX *ctx, char **reg)
 
     oe_val = json_value_init_object();
     oe_obj = json_value_get_object(oe_val);
-    //TODO: need public API to allow app to specify some of these values
-    json_object_set_string(oe_obj, "vendor_name", "VendorName");
-    json_object_set_string(oe_obj, "vendor_url", "www.vendor.org");
-    json_object_set_string(oe_obj, "contact", "John Doe");
-    json_object_set_string(oe_obj, "contact_email", "jdoe@vendor.org");
-    json_object_set_string(oe_obj, "module_name", "Crypto Module 1.0");
-    json_object_set_string(oe_obj, "module_type", "Software");
+
+    acvp_set_vendor_info(oe_obj, "Vendor Name", "www.vendor.org", "John Doe", "jdoe@vendor.org");
+    acvp_set_module_info(oe_obj, "Crypto Module 1.0", "Software", "Sample crypto module for demonstrating ACV protocol.");
 
     oee_val = json_value_init_object();
     oee_obj = json_value_get_object(oee_val);
-    json_object_set_string(oee_obj, "module_version", "1.0");
-    json_object_set_string(oee_obj, "processor", "Intel Woodcrest");
-    json_object_set_string(oee_obj, "operating_system", "Linux 3.1");
-    json_object_set_value(oe_obj, "operational_environment", oee_val);
+    acvp_set_op_env(oee_obj, "1.0", "Intel Woodcrest", "Linux 3.1", oee_val);
 
-    json_object_set_string(oe_obj, "implementation_description", "Sample crypto module for demonstrating ACV protocol.");
     json_object_set_value(obj, "oe_information", oe_val);
 
     /*
