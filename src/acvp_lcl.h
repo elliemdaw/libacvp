@@ -1120,8 +1120,6 @@ char *acvp_lookup_rsa_randpq_name (int value);
 
 int acvp_lookup_rsa_randpq_index (const char *value);
 
-unsigned int yes_or_no (ACVP_CTX *ctx, const char *text);
-
 ACVP_RESULT acvp_create_array (JSON_Object **obj, JSON_Value **val, JSON_Array **arry);
 
 ACVP_RESULT is_valid_tf_param (int value);
@@ -1129,8 +1127,6 @@ ACVP_RESULT is_valid_tf_param (int value);
 ACVP_RESULT is_valid_hash_alg (char *value);
 
 ACVP_RESULT is_valid_prime_test (char *value);
-
-ACVP_RESULT is_valid_rsa_mod (int value);
 
 int acvp_lookup_ecdsa_curve (ACVP_CIPHER cipher, char *curve_name);
 

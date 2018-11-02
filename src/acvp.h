@@ -528,7 +528,8 @@ typedef enum acvp_rsa_keygen_mode_t {
     ACVP_RSA_KEYGEN_B33,
     ACVP_RSA_KEYGEN_B34,
     ACVP_RSA_KEYGEN_B35,
-    ACVP_RSA_KEYGEN_B36
+    ACVP_RSA_KEYGEN_B36,
+    ACVP_RSA_KEYGEN_END
 } ACVP_RSA_KEYGEN_MODE;
 
 /*! @struct ACVP_RSA_SIG_TYPE */

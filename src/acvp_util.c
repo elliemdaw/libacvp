@@ -24,6 +24,7 @@
 * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *****************************************************************************/
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include "acvp.h"
@@ -129,7 +130,7 @@ char *acvp_lookup_cipher_name (ACVP_CIPHER alg) {
 
     for (i = 0; i < ACVP_ALG_MAX; i++) {
         if (alg_tbl[i].cipher == alg) {
-            return alg_tbl[i].name;
+            return strdup(alg_tbl[i].name);
         }
     }
     return NULL;
@@ -165,15 +166,15 @@ ACVP_CIPHER acvp_lookup_cipher_index (const char *algorithm) {
 char *acvp_lookup_rsa_randpq_name (int value) {
     switch (value) {
     case ACVP_RSA_KEYGEN_B32:
-        return "B.3.2"; // "provRP"
+        return strdup(ACVP_RSA_RANDPQ32_STR); // "provRP"
     case ACVP_RSA_KEYGEN_B33:
-        return "B.3.3"; // "probRP"
+        return strdup(ACVP_RSA_RANDPQ33_STR); // "probRP"
     case ACVP_RSA_KEYGEN_B34:
-        return "B.3.4"; // "provPC"
+        return strdup(ACVP_RSA_RANDPQ34_STR); // "provPC"
     case ACVP_RSA_KEYGEN_B35:
-        return "B.3.5"; // "bothPC"
+        return strdup(ACVP_RSA_RANDPQ35_STR); // "bothPC"
     case ACVP_RSA_KEYGEN_B36:
-        return "B.3.6"; // "probPC"
+        return strdup(ACVP_RSA_RANDPQ36_STR); // "probPC"
     default:
         return NULL;
     }
@@ -183,11 +184,11 @@ int acvp_lookup_rsa_randpq_index (const char *value) {
     if (!value) {
         return 0;
     }
-    if (strncmp(value, "B.3.2", 5) == 0) { return ACVP_RSA_KEYGEN_B32; }
-    if (strncmp(value, "B.3.3", 5) == 0) { return ACVP_RSA_KEYGEN_B33; }
-    if (strncmp(value, "B.3.4", 5) == 0) { return ACVP_RSA_KEYGEN_B34; }
-    if (strncmp(value, "B.3.5", 5) == 0) { return ACVP_RSA_KEYGEN_B35; }
-    if (strncmp(value, "B.3.6", 5) == 0) { return ACVP_RSA_KEYGEN_B36; }
+    if (strncmp(value, ACVP_RSA_RANDPQ32_STR, strlen(ACVP_RSA_RANDPQ32_STR)) == 0) { return ACVP_RSA_KEYGEN_B32; }
+    if (strncmp(value, ACVP_RSA_RANDPQ33_STR, strlen(ACVP_RSA_RANDPQ33_STR)) == 0) { return ACVP_RSA_KEYGEN_B33; }
+    if (strncmp(value, ACVP_RSA_RANDPQ34_STR, strlen(ACVP_RSA_RANDPQ34_STR)) == 0) { return ACVP_RSA_KEYGEN_B34; }
+    if (strncmp(value, ACVP_RSA_RANDPQ35_STR, strlen(ACVP_RSA_RANDPQ35_STR)) == 0) { return ACVP_RSA_KEYGEN_B35; }
+    if (strncmp(value, ACVP_RSA_RANDPQ36_STR, strlen(ACVP_RSA_RANDPQ36_STR)) == 0) { return ACVP_RSA_KEYGEN_B36; }
     return 0;
 }
 
@@ -198,6 +199,7 @@ int acvp_lookup_rsa_randpq_index (const char *value) {
  */
 ACVP_DRBG_MODE acvp_lookup_drbg_mode_index (const char *mode) {
     int i;
+    if (!mode) return ACVP_DRBG_MODE_END;
     struct acvp_drbg_mode_name_t drbg_mode_tbl[ACVP_DRBG_MODE_END] = {
             {ACVP_DRBG_SHA_1,       ACVP_STR_SHA_1},
             {ACVP_DRBG_SHA_224,     ACVP_STR_SHA2_224},
@@ -250,17 +252,31 @@ ACVP_RESULT is_valid_prime_test (char *value) {
     } else { return ACVP_SUCCESS; }
 }
 
-/* This function checks to see if the value is a valid prime test (RSA) */
-ACVP_RESULT is_valid_rsa_mod (int value) {
-    if (value != 2048 &&
-        value != 3072 &&
-        value != 4096) {
-        return ACVP_INVALID_ARG;
-    } else { return ACVP_SUCCESS; }
+static void lower_string(char s[]) {
+   int c = 0;
+   
+   while (s[c] != '\0') {
+      if (s[c] >= 'A' && s[c] <= 'Z') {
+         s[c] = s[c] + 32;
+      }
+      c++;
+   }
 }
 
 int acvp_lookup_ecdsa_curve (ACVP_CIPHER cipher, char *curve_name) {
-
+    if (!curve_name) return 0;
+    
+    switch (cipher) {
+    case ACVP_ECDSA_KEYGEN:
+    case ACVP_ECDSA_KEYVER:
+    case ACVP_ECDSA_SIGGEN:
+    case ACVP_ECDSA_SIGVER:
+        break;
+    default:
+        return 0;
+    }
+    
+    lower_string(curve_name);
     if (strncmp(curve_name, "p-224", 5) == 0) {
         return ACVP_ECDSA_CURVE_P224;
     } else if (strncmp(curve_name, "p-256", 5) == 0) {
@@ -386,7 +402,7 @@ ACVP_RESULT acvp_hexstr_to_bin (const char *src, unsigned char *dest, int dest_m
     int length_converted = 0;
 
     if (!src || !dest) {
-        return ACVP_INVALID_ARG;
+        return ACVP_MISSING_ARG;
     }
 
     src_len = (int) strlen((char *) src);
@@ -451,6 +467,8 @@ ACVP_DRBG_CAP_MODE_LIST *acvp_locate_drbg_mode_entry (ACVP_CAPS_LIST *cap, ACVP_
     ACVP_DRBG_CAP_MODE_LIST *cap_mode_list;
     ACVP_DRBG_CAP_MODE *cap_mode;
     ACVP_DRBG_CAP *drbg_cap;
+    
+    if (!cap) return NULL;
 
     drbg_cap = cap->cap.drbg_cap;
 
@@ -477,21 +495,6 @@ ACVP_DRBG_CAP_MODE_LIST *acvp_locate_drbg_mode_entry (ACVP_CAPS_LIST *cap, ACVP_
     return NULL;
 }
 
-
-unsigned int yes_or_no (ACVP_CTX *ctx, const char *text) {
-    unsigned int result;
-    if (!ctx || !text) { return 0; }
-    if (!strncmp(text, "yes", 3)) {
-        result = 1;
-    } else if (!strncmp(text, "no", 2)) {
-        result = 0;
-    } else {
-        ACVP_LOG_ERR("ERROR: unsupported yes/no value from server treated as 'no': (%s)", text);
-        result = 0;
-    }
-    return result;
-}
-
 /*
  * Creates a JSON acvp array which consists of
  * [{preamble}, {object}]
@@ -505,6 +508,8 @@ ACVP_RESULT acvp_create_array (JSON_Object **obj, JSON_Value **val, JSON_Array *
     JSON_Value *ver_val = NULL;
     JSON_Object *ver_obj = NULL;
     JSON_Array *reg_arry = NULL;
+    
+    if (!obj || !val || !arry) return ACVP_MISSING_ARG;
 
     reg_arry_val = json_value_init_array();
     reg_obj = json_value_get_object(reg_arry_val);
@@ -533,10 +538,12 @@ char *acvp_lookup_error_string (ACVP_RESULT rv) {
             {ACVP_NO_CTX, "No valid context found"},
             {ACVP_TRANSPORT_FAIL, "Error using transport library"},
             {ACVP_JSON_ERR, "Error using JSON library"},
+            {ACVP_NO_DATA, "Trying to use data but none was found"},
             {ACVP_UNSUPPORTED_OP, "Unsupported operation"},
             {ACVP_CLEANUP_FAIL, "Error cleaning up ACVP context"},
             {ACVP_KAT_DOWNLOAD_RETRY, "Error, need to retry"},
             {ACVP_INVALID_ARG, "Invalid argument"},
+            {ACVP_MISSING_ARG, "Missing a required argument"},
             {ACVP_CRYPTO_MODULE_FAIL, "Error from crypto module processing a vector set"},
             {ACVP_CRYPTO_TAG_FAIL, "Error from crypto module processing a vector set"},
             {ACVP_CRYPTO_WRAP_FAIL, "Error from crypto module processing a vector set"},
