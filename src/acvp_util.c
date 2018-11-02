@@ -587,3 +587,21 @@ void ctr128_inc(unsigned char *counter)
         c >>= 8;
     } while (n);
 }
+
+void acvp_free_kv_list (ACVP_KV_LIST **kv_list) {
+    ACVP_KV_LIST *tmp;
+    while (*kv_list) {
+        tmp = *kv_list;
+        *kv_list = (*kv_list)->next;
+        if (tmp->key) {
+            free(tmp->key);
+            tmp->key = NULL;
+        }
+        if (tmp->value) {
+            free(tmp->value);
+            tmp->value = NULL;
+        }
+        free(tmp);
+        tmp = NULL;
+    }
+}

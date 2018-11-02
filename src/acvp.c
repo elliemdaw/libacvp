@@ -41,11 +41,19 @@
 /*
  * Forward prototypes for local functions
  */
-static ACVP_RESULT acvp_parse_register (ACVP_CTX *ctx);
-
 static ACVP_RESULT acvp_parse_login (ACVP_CTX *ctx);
 
-static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, int vs_id);
+static ACVP_RESULT acvp_parse_vendors (ACVP_CTX *ctx);
+
+static ACVP_RESULT acvp_parse_modules (ACVP_CTX *ctx);
+
+static ACVP_RESULT acvp_parse_oes (ACVP_CTX *ctx);
+
+static ACVP_RESULT acvp_parse_dependencies (ACVP_CTX *ctx, ACVP_DEPENDENCY_LIST *current_dep);
+
+static ACVP_RESULT acvp_parse_test_session_register (ACVP_CTX *ctx);
+
+static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, char *vsid_url);
 
 static ACVP_RESULT acvp_process_vector_set (ACVP_CTX *ctx, JSON_Object *obj);
 
@@ -57,8 +65,7 @@ static void acvp_cap_free_nl (ACVP_NAME_LIST *list);
 
 static void acvp_cap_free_hash_pairs (ACVP_RSA_HASH_PAIR_LIST *list);
 
-static ACVP_RESULT acvp_get_result_vsid (ACVP_CTX *ctx, int vs_id);
-
+static ACVP_RESULT acvp_get_result_test_session (ACVP_CTX *ctx, char *session_url);
 
 /*
  * This table maps ACVP operations to handlers within libacvp.
@@ -155,7 +162,7 @@ ACVP_RESULT acvp_create_test_session (ACVP_CTX **ctx,
         return ACVP_INVALID_ARG;
     }
     if (*ctx) {
-        printf("Err: cannot initialize non-null ctx; clear ctx & set to NULL first");
+        printf("Err: cannot initialize non-null ctx; clear ctx & set to NULL first\n");
         return ACVP_DUPLICATE_CTX;
     }
     *ctx = calloc(1, sizeof(ACVP_CTX));
@@ -577,15 +584,25 @@ static void acvp_cap_free_kdf108 (ACVP_CAPS_LIST *cap_list) {
 ACVP_RESULT acvp_free_test_session (ACVP_CTX *ctx) {
     ACVP_VS_LIST *vs_entry, *vs_e2;
     ACVP_CAPS_LIST *cap_entry, *cap_e2;
+    ACVP_DEPENDENCY_LIST *dep_entry, *dep_e2;
 
     if (ctx) {
         if (ctx->reg_buf) { free(ctx->reg_buf); }
+        if (ctx->ans_buf) { free(ctx->ans_buf); }
+        if (ctx->login_buf) { free(ctx->login_buf); }
+        if (ctx->test_sess_buf) { free(ctx->test_sess_buf); }
         if (ctx->kat_buf) { free(ctx->kat_buf); }
         if (ctx->upld_buf) { free(ctx->upld_buf); }
         if (ctx->kat_resp) { json_value_free(ctx->kat_resp); }
         if (ctx->server_name) { free(ctx->server_name); }
-        if (ctx->vendor_name) { free(ctx->vendor_name); }
+        if (ctx->vsid_url) { free(ctx->vsid_url); }
         if (ctx->vendor_url) { free(ctx->vendor_url); }
+        if (ctx->module_url) { free(ctx->module_url); }
+        if (ctx->oe_url) { free(ctx->oe_url); }
+        if (ctx->oe_name) { free(ctx->oe_name); }
+        if (ctx->session_url) { free(ctx->session_url); }
+        if (ctx->vendor_name) { free(ctx->vendor_name); }
+        if (ctx->vendor_website) { free(ctx->vendor_website); }
         if (ctx->contact_name) { free(ctx->contact_name); }
         if (ctx->contact_email) { free(ctx->contact_email); }
         if (ctx->module_name) { free(ctx->module_name); }
@@ -602,6 +619,19 @@ ACVP_RESULT acvp_free_test_session (ACVP_CTX *ctx) {
                 vs_e2 = vs_entry->next;
                 free(vs_entry);
                 vs_entry = vs_e2;
+            }
+        }
+        if (ctx->vsid_url_list) {
+            acvp_cap_free_nl(ctx->vsid_url_list);
+        }
+        if (ctx->dependency_list) {
+            dep_entry = ctx->dependency_list;
+            while (dep_entry) {
+                dep_e2= dep_entry->next;
+                acvp_free_kv_list(&(dep_entry->attrs_list));
+                free(dep_entry->url);
+                free(dep_entry);
+                dep_entry = dep_e2;
             }
         }
         if (ctx->caps_list) {
@@ -804,12 +834,12 @@ ACVP_RESULT acvp_set_vendor_info (ACVP_CTX *ctx,
     }
 
     if (ctx->vendor_name) { free(ctx->vendor_name); }
-    if (ctx->vendor_url) { free(ctx->vendor_url); }
+    if (ctx->vendor_website) { free(ctx->vendor_website); }
     if (ctx->contact_name) { free(ctx->contact_name); }
     if (ctx->contact_email) { free(ctx->contact_email); }
 
     ctx->vendor_name = strndup(vendor_name, ACVP_SESSION_PARAMS_STR_LEN_MAX);
-    ctx->vendor_url = strndup(vendor_url, ACVP_SESSION_PARAMS_STR_LEN_MAX);
+    ctx->vendor_website = strndup(vendor_url, ACVP_SESSION_PARAMS_STR_LEN_MAX);
     ctx->contact_name = strndup(contact_name, ACVP_SESSION_PARAMS_STR_LEN_MAX);
     ctx->contact_email = strndup(contact_email, ACVP_SESSION_PARAMS_STR_LEN_MAX);
 
@@ -857,6 +887,46 @@ ACVP_RESULT acvp_set_module_info (ACVP_CTX *ctx,
 }
 
 /*
+ * Allows application to specify the crypto module attributes for
+ * the test session.
+ */
+ACVP_RESULT acvp_add_oe_dependency (ACVP_CTX *ctx,
+                                    const char *oe_name,
+                                    ACVP_KV_LIST *key_val_list) {
+    ACVP_DEPENDENCY_LIST *current_dep = NULL;
+    if (!ctx) {
+        return ACVP_NO_CTX;
+    }
+    
+    if (!oe_name || !key_val_list) {
+        ACVP_LOG_ERR("Must provide values for oe dependency info");
+        return ACVP_INVALID_ARG;
+    }
+    
+    if (strnlen(oe_name, ACVP_SESSION_PARAMS_STR_LEN_MAX + 1) > ACVP_SESSION_PARAMS_STR_LEN_MAX) {
+        ACVP_LOG_ERR("oe info string(s) too long");
+        return ACVP_INVALID_ARG;
+    }
+    
+    if (ctx->oe_name) free(ctx->oe_name);
+    ctx->oe_name = strndup(oe_name, ACVP_SESSION_PARAMS_STR_LEN_MAX);
+    
+    if (!ctx->dependency_list) {
+        ctx->dependency_list = calloc(1, sizeof(ACVP_DEPENDENCY_LIST));
+        ctx->dependency_list->attrs_list = key_val_list;
+    } else {
+        current_dep = ctx->dependency_list;
+        while (current_dep->next) {
+            current_dep = current_dep->next;
+        }
+        current_dep->next = calloc(1, sizeof(ACVP_DEPENDENCY_LIST));
+        current_dep->next->attrs_list = key_val_list;
+    }
+    
+    return ACVP_SUCCESS;
+}
+
+/*
  * This function is used by the application to specify the
  * ACVP server address and TCP port#.
  */
@@ -898,6 +968,27 @@ ACVP_RESULT acvp_set_path_segment (ACVP_CTX *ctx, char *path_segment) {
     if (ctx->path_segment) { free(ctx->path_segment); }
     ctx->path_segment = strndup(path_segment, ACVP_SESSION_PARAMS_STR_LEN_MAX);
 
+    return ACVP_SUCCESS;
+}
+
+/*
+ * This function is used by the application to specify the
+ * ACVP server URI path segment prefix.
+ */
+ACVP_RESULT acvp_set_api_context (ACVP_CTX *ctx, char *api_context) {
+    if (!ctx) {
+        return ACVP_NO_CTX;
+    }
+    if (!api_context) {
+        return ACVP_INVALID_ARG;
+    }
+    if (strnlen(api_context, ACVP_SESSION_PARAMS_STR_LEN_MAX + 1) > ACVP_SESSION_PARAMS_STR_LEN_MAX) {
+        ACVP_LOG_ERR("API context string(s) too long");
+        return ACVP_INVALID_ARG;
+    }
+    if (ctx->api_context) { free(ctx->api_context); }
+    ctx->api_context = strndup(api_context, ACVP_SESSION_PARAMS_STR_LEN_MAX);
+    
     return ACVP_SUCCESS;
 }
 
@@ -1033,11 +1124,12 @@ end:
  * identifiers that the client will need to process.
  */
 ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
-    ACVP_RESULT rv;
-    char *reg;
-    char *login;
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    char *reg = NULL, *vendors = NULL, *modules = NULL, *oes = NULL, *dep = NULL;
+    char *login = NULL;
     JSON_Value *tmp_json_from_file;
-
+    ACVP_DEPENDENCY_LIST *current_dep;
+    
     if (!ctx) {
         return ACVP_NO_CTX;
     }
@@ -1049,7 +1141,7 @@ ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
         rv = acvp_build_login(ctx, &login, 0);
         if (rv != ACVP_SUCCESS) {
             ACVP_LOG_ERR("Unable to build login message");
-            return rv;
+            goto end;
         }
 
         if (ctx->debug >= ACVP_LOG_LVL_STATUS) {
@@ -1070,7 +1162,7 @@ ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
         }
         if (rv != ACVP_SUCCESS) {
             ACVP_LOG_STATUS("Login Send Failed");
-            return rv;
+            goto end;
         }
     }
 
@@ -1079,11 +1171,100 @@ ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
          * Construct the registration message based on the capabilities
          * the user has enabled.
          */
-        rv = acvp_build_register(ctx, &reg);
+        rv = acvp_build_vendors(ctx, &vendors);
+        if (rv != ACVP_SUCCESS) {
+            ACVP_LOG_ERR("Unable to build vendor message");
+            goto end;
+        }
+        rv = acvp_send_vendor_registration(ctx, vendors);
+        if (rv == ACVP_SUCCESS) {
+            ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
+            rv = acvp_parse_vendors(ctx);
+            if (rv != ACVP_SUCCESS) {
+                ACVP_LOG_ERR("Failed to parse vendor response");
+                goto end;
+            }
+        } else {
+            ACVP_LOG_ERR("Failed to send vendor registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
+        }
+        
+        rv = acvp_build_modules(ctx, &modules);
+        if (rv != ACVP_SUCCESS) {
+            ACVP_LOG_ERR("Unable to build module message");
+            goto end;
+        }
+        rv = acvp_send_module_registration(ctx, modules);
+        if (rv == ACVP_SUCCESS) {
+            ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
+            rv = acvp_parse_modules(ctx);
+            if (rv != ACVP_SUCCESS) {
+                ACVP_LOG_ERR("Failed to parse module response");
+                goto end;
+            }
+        } else {
+            ACVP_LOG_ERR("Failed to send module registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
+        }
+        
+        // TODO - dependency stuff... only supports one OE with key/value list of dependencies
+        current_dep = ctx->dependency_list;
+        while (current_dep) {
+            rv = acvp_build_dependency(current_dep, &dep);
+            if (rv != ACVP_SUCCESS) {
+                ACVP_LOG_ERR("Unable to build dep message");
+                goto end;
+            }
+            rv = acvp_send_dep_registration(ctx, dep);
+            if (rv == ACVP_SUCCESS) {
+                ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
+                rv = acvp_parse_dependencies(ctx, current_dep);
+                if (rv != ACVP_SUCCESS) {
+                    ACVP_LOG_ERR("Failed to parse dependency response");
+                    goto end;
+                }
+            } else {
+                ACVP_LOG_ERR("Failed to send module registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
+            }
+            current_dep = current_dep->next;
+        }
+    
+        rv = acvp_build_oes(ctx, &oes);
+        if (rv != ACVP_SUCCESS) {
+            ACVP_LOG_ERR("Unable to build oe message");
+            goto end;
+        }
+        rv = acvp_send_oe_registration(ctx, oes);
+        if (rv == ACVP_SUCCESS) {
+            ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
+            rv = acvp_parse_oes(ctx);
+            if (rv != ACVP_SUCCESS) {
+                ACVP_LOG_ERR("Failed to parse oe response");
+                goto end;
+            }
+        } else {
+            ACVP_LOG_ERR("Failed to send oe registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
+        }
+    
+        /*
+         * Send the capabilities to the ACVP server and get the response,
+         * which should be a list of vector set ID urls
+         */
+        rv = acvp_build_test_session(ctx, &reg);
         if (rv != ACVP_SUCCESS) {
             ACVP_LOG_ERR("Unable to build register message");
-            return rv;
+            goto end;
         }
+        rv = acvp_send_test_session_registration(ctx, reg);
+        if (rv == ACVP_SUCCESS) {
+            ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
+            rv = acvp_parse_test_session_register(ctx);
+            if (rv != ACVP_SUCCESS) {
+                ACVP_LOG_ERR("Failed to parse test session response");
+                goto end;
+            }
+        } else {
+            ACVP_LOG_ERR("Failed to send registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
+        }
+        
     } else {
         tmp_json_from_file = json_parse_file(ctx->json_filename);
         reg = json_serialize_to_string_pretty(tmp_json_from_file);
@@ -1095,20 +1276,13 @@ ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
     } else {
         ACVP_LOG_INFO("POST %s", reg);
     }
-    /*
-     * Send the capabilities to the ACVP server and get the response,
-     * which should be a list of VS identifiers that will need
-     * to be downloaded and processed.
-     */
-    rv = acvp_send_register(ctx, reg);
-    if (rv == ACVP_SUCCESS) {
-        ACVP_LOG_STATUS("200 OK %s", ctx->reg_buf);
-        rv = acvp_parse_register(ctx);
-    } else {
-        ACVP_LOG_ERR("Failed to send registration, err=%d, %s", rv, acvp_lookup_error_string(rv));
-    }
 
-    json_free_serialized_string(reg);
+end:
+    if (reg) json_free_serialized_string(reg);
+    if (vendors) json_free_serialized_string(vendors);
+    if (modules) json_free_serialized_string(modules);
+    if (oes) json_free_serialized_string(oes);
+    if (dep) json_free_serialized_string(dep);
 
     return (rv);
 }
@@ -1117,19 +1291,19 @@ ACVP_RESULT acvp_register (ACVP_CTX *ctx) {
  * Append a VS identifier to the list of VS identifiers
  * that will need to be downloaded and processed later.
  */
-static ACVP_RESULT acvp_append_vs_entry (ACVP_CTX *ctx, int vs_id) {
-    ACVP_VS_LIST *vs_entry, *vs_e2;
-
-    vs_entry = calloc(1, sizeof(ACVP_VS_LIST));
+static ACVP_RESULT acvp_append_vsid_url (ACVP_CTX *ctx, char *vsid_url) {
+    ACVP_NAME_LIST *vs_entry, *vs_e2;
+    
+    vs_entry = calloc(1, sizeof(ACVP_NAME_LIST));
     if (!vs_entry) {
         return ACVP_MALLOC_FAIL;
     }
-    vs_entry->vs_id = vs_id;
-
-    if (!ctx->vs_list) {
-        ctx->vs_list = vs_entry;
+    vs_entry->name = strndup(vsid_url, ACVP_ATTR_URL_MAX);
+    
+    if (!ctx->vsid_url_list) {
+        ctx->vsid_url_list = vs_entry;
     } else {
-        vs_e2 = ctx->vs_list;
+        vs_e2 = ctx->vsid_url_list;
         while (vs_e2->next) {
             vs_e2 = vs_e2->next;
         }
@@ -1186,6 +1360,7 @@ static ACVP_RESULT acvp_parse_login (ACVP_CTX *ctx) {
     char *json_buf = ctx->reg_buf;
     int i;
     const char *jwt;
+    ACVP_RESULT rv = ACVP_SUCCESS;
 
     /*
      * Parse the JSON
@@ -1205,44 +1380,39 @@ static ACVP_RESULT acvp_parse_login (ACVP_CTX *ctx) {
      */
     jwt = json_object_get_string(obj, "accessToken");
     if (!jwt) {
-        json_value_free(val);
         ACVP_LOG_ERR("No access_token provided in registration response");
-        return ACVP_NO_TOKEN;
+        rv = ACVP_NO_TOKEN;
+        goto end;
     } else {
         i = strnlen(jwt, ACVP_JWT_TOKEN_MAX + 1);
         if (i > ACVP_JWT_TOKEN_MAX) {
-            json_value_free(val);
             ACVP_LOG_ERR("access_token too large");
-            return ACVP_NO_TOKEN;
+            rv = ACVP_NO_TOKEN;
+            goto end;
         }
         ctx->jwt_token = calloc(1, i + 1);
         strncpy(ctx->jwt_token, jwt, i);
         ctx->jwt_token[i] = 0;
         ACVP_LOG_STATUS("JWT: %s", ctx->jwt_token);
     }
+end:
     json_value_free(val);
-    return ACVP_SUCCESS;
+    return rv;
 }
 
 /*
- * This routine performs the JSON parsing of the registration response
- * from the ACVP server.  The response should contain a list of vector
- * set (VS) identifiers that will need to be downloaded and processed
- * by the DUT.
+ * This routine performs the JSON parsing of the vendor response
+ * from the ACVP server.  The response should contain a url to
+ * access the registered vendor
  */
-static ACVP_RESULT acvp_parse_register (ACVP_CTX *ctx) {
+static ACVP_RESULT acvp_parse_vendors (ACVP_CTX *ctx) {
     JSON_Value *val;
     JSON_Object *obj = NULL;
-    JSON_Object *cap_obj = NULL;
-    ACVP_RESULT rv;
     char *json_buf = ctx->reg_buf;
-    JSON_Array *vect_sets;
-    JSON_Value *vs_val;
-    JSON_Object *vs_obj;
-    int i, vs_cnt;
-    int vs_id;
-    const char *jwt;
-
+    int i;
+    const char *vendor_url;
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    
     /*
      * Parse the JSON
      */
@@ -1251,62 +1421,214 @@ static ACVP_RESULT acvp_parse_register (ACVP_CTX *ctx) {
         ACVP_LOG_ERR("JSON parse error");
         return ACVP_JSON_ERR;
     }
-
+    
     obj = acvp_get_obj_from_rsp(val);
-
-    /*
-     * Get the JWT assigned to this session by the server.  This will need
-     * to be included when sending the vector responses back to the server
-     * later.
-     */
-    jwt = json_object_get_string(obj, "accessToken");
-    if (!jwt) {
-        json_value_free(val);
-        ACVP_LOG_ERR("No access_token provided in registration response");
-        return ACVP_NO_TOKEN;
+    vendor_url = json_object_get_string(obj, "url");
+    if (!vendor_url) {
+        ACVP_LOG_ERR("No url provided in vendor response");
+        rv = ACVP_NO_TOKEN;
+        goto end;
     } else {
-        i = strnlen(jwt, ACVP_JWT_TOKEN_MAX + 1);
-        if (i > ACVP_JWT_TOKEN_MAX) {
-            json_value_free(val);
-            ACVP_LOG_ERR("access_token too large");
-            return ACVP_NO_TOKEN;
+        i = strnlen(vendor_url, ACVP_ATTR_URL_MAX + 1);
+        if (i > ACVP_ATTR_URL_MAX) {
+            ACVP_LOG_ERR("vendor url too large");
+            rv = ACVP_NO_TOKEN;
+            goto end;
         }
-        /* free it if it was used for login */
-        if (ctx->jwt_token) {
-            free(ctx->jwt_token);
-        }
-        ctx->jwt_token = calloc(1, i + 1);
-        strncpy(ctx->jwt_token, jwt, i);
-        ctx->jwt_token[i] = 0;
-        ACVP_LOG_STATUS("JWT: %s", ctx->jwt_token);
+        ctx->vendor_url = calloc(1, i + 1);
+        strncpy(ctx->vendor_url, vendor_url, i);
+        ctx->vendor_url[i] = 0;
+        ACVP_LOG_STATUS("Vendor URL: %s", ctx->vendor_url);
     }
+end:
+    json_value_free(val);
+    return rv;
+}
 
+/*
+ * This routine performs the JSON parsing of the OE response
+ * from the ACVP server.  The response should contain a url to
+ * access the registered OE
+ */
+static ACVP_RESULT acvp_parse_oes (ACVP_CTX *ctx) {
+    JSON_Value *val;
+    JSON_Object *obj = NULL;
+    char *json_buf = ctx->reg_buf;
+    int i;
+    const char *oe_url;
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    
+    /*
+     * Parse the JSON
+     */
+    val = json_parse_string_with_comments(json_buf);
+    if (!val) {
+        ACVP_LOG_ERR("JSON parse error");
+        return ACVP_JSON_ERR;
+    }
+    
+    obj = acvp_get_obj_from_rsp(val);
+    oe_url = json_object_get_string(obj, "url");
+    if (!oe_url) {
+        ACVP_LOG_ERR("No url provided in oe response");
+        rv = ACVP_NO_TOKEN;
+        goto end;
+    } else {
+        i = strnlen(oe_url, ACVP_ATTR_URL_MAX + 1);
+        if (i > ACVP_ATTR_URL_MAX) {
+            ACVP_LOG_ERR("oe url too large");
+            rv = ACVP_NO_TOKEN;
+            goto end;
+        }
+        ctx->oe_url = calloc(1, i + 1);
+        strncpy(ctx->oe_url, oe_url, i);
+        ctx->oe_url[i] = 0;
+        ACVP_LOG_STATUS("OE URL: %s", ctx->oe_url);
+    }
+end:
+    json_value_free(val);
+    return rv;
+}
+
+/*
+ * This routine performs the JSON parsing of the modules response
+ * from the ACVP server.  The response should contain a url to
+ * access the registered module
+ */
+static ACVP_RESULT acvp_parse_modules (ACVP_CTX *ctx) {
+    JSON_Value *val;
+    JSON_Object *obj = NULL;
+    char *json_buf = ctx->reg_buf;
+    int i;
+    const char *module_url;
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    
+    /*
+     * Parse the JSON
+     */
+    val = json_parse_string_with_comments(json_buf);
+    if (!val) {
+        ACVP_LOG_ERR("JSON parse error");
+        return ACVP_JSON_ERR;
+    }
+    
+    obj = acvp_get_obj_from_rsp(val);
+    module_url = json_object_get_string(obj, "url");
+    if (!module_url) {
+        ACVP_LOG_ERR("No url provided in module response");
+        rv = ACVP_NO_TOKEN;
+        goto end;
+    } else {
+        i = strnlen(module_url, ACVP_ATTR_URL_MAX + 1);
+        if (i > ACVP_ATTR_URL_MAX) {
+            ACVP_LOG_ERR("module url too large");
+            rv = ACVP_NO_TOKEN;
+            goto end;
+        }
+        ctx->module_url = calloc(1, i + 1);
+        strncpy(ctx->module_url, module_url, i);
+        ctx->module_url[i] = 0;
+        ACVP_LOG_STATUS("Module URL: %s", ctx->module_url);
+    }
+end:
+    json_value_free(val);
+    return rv;
+}
+
+/*
+ * This routine performs the JSON parsing of the dependency response
+ * from the ACVP server.  The response should contain a url to
+ * access the registered dependency
+ */
+static ACVP_RESULT acvp_parse_dependencies (ACVP_CTX *ctx, ACVP_DEPENDENCY_LIST *current_dep) {
+    JSON_Value *val;
+    JSON_Object *obj = NULL;
+    char *json_buf = ctx->reg_buf;
+    int i;
+    const char *dep_url;
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    
+    /*
+     * Parse the JSON
+     */
+    val = json_parse_string_with_comments(json_buf);
+    if (!val) {
+        ACVP_LOG_ERR("JSON parse error");
+        return ACVP_JSON_ERR;
+    }
+    
+    obj = acvp_get_obj_from_rsp(val);
+    dep_url = json_object_get_string(obj, "url");
+    if (!dep_url) {
+        ACVP_LOG_ERR("No url provided in module response");
+        rv = ACVP_MISSING_ARG;
+        goto end;
+    } else {
+        i = strnlen(dep_url, ACVP_ATTR_URL_MAX + 1);
+        if (i > ACVP_ATTR_URL_MAX) {
+            ACVP_LOG_ERR("depedency url too large");
+            rv = ACVP_INVALID_ARG;
+            goto end;
+        }
+        current_dep->url = strndup(dep_url, ACVP_ATTR_URL_MAX);
+        ACVP_LOG_STATUS("dependency URL: %s", current_dep->url);
+    }
+end:
+    json_value_free(val);
+    return rv;
+}
+
+/*
+ * This routine performs the JSON parsing of the test session registration
+ * from the server. It should contain a list of URLs for vector sets that
+ * can be queried to get the test parameters.
+ */
+static ACVP_RESULT acvp_parse_test_session_register (ACVP_CTX *ctx) {
+    JSON_Value *val;
+    JSON_Object *obj = NULL;
+    ACVP_RESULT rv;
+    char *json_buf = ctx->reg_buf;
+    JSON_Array *vect_sets;
+    char *test_session_url;
+    int i, vs_cnt;
+    char *vsid_url;
+    
+    /*
+     * Parse the JSON
+     */
+    val = json_parse_string_with_comments(json_buf);
+    if (!val) {
+        ACVP_LOG_ERR("JSON parse error");
+        return ACVP_JSON_ERR;
+    }
+    
+    obj = acvp_get_obj_from_rsp(val);
+    
     /*
      * Identify the VS identifiers provided by the server, save them for
      * processing later.
      */
-    cap_obj = json_object_get_object(obj, "capabilityResponse");
-    vect_sets = json_object_get_array(cap_obj, "vectorSets");
+    test_session_url = (char *)json_object_get_string(obj, "url");
+    ctx->session_url = strndup(test_session_url, ACVP_ATTR_URL_MAX);
+    
+    vect_sets = json_object_get_array(obj, "vectorSetUrls");
     vs_cnt = json_array_get_count(vect_sets);
     for (i = 0; i < vs_cnt; i++) {
-        vs_val = json_array_get_value(vect_sets, i);
-        vs_obj = json_value_get_object(vs_val);
-        vs_id = json_object_get_number(vs_obj, "vsId");
-
-        rv = acvp_append_vs_entry(ctx, vs_id);
+        vsid_url = (char *)json_array_get_string(vect_sets, i);
+        
+        rv = acvp_append_vsid_url(ctx, vsid_url);
         if (rv != ACVP_SUCCESS) {
-            json_value_free(val);
-            return rv;
+            goto end;
         }
-        ACVP_LOG_INFO("Received vs_id=%d", vs_id);
+        ACVP_LOG_INFO("Received vsid_url=%s", vsid_url);
     }
-
-    json_value_free(val);
-
-    ACVP_LOG_INFO("Successfully processed registration response from server");
-
-    return ACVP_SUCCESS;
-
+    
+    ACVP_LOG_INFO("Successfully processed test session registration response from server");
+    
+end:
+    if (val) json_value_free(val);
+    return rv;
+    
 }
 
 /*
@@ -1317,7 +1639,7 @@ static ACVP_RESULT acvp_parse_register (ACVP_CTX *ctx) {
  */
 ACVP_RESULT acvp_process_tests (ACVP_CTX *ctx) {
     ACVP_RESULT rv = ACVP_SUCCESS;
-    ACVP_VS_LIST *vs_entry;
+    ACVP_NAME_LIST *vs_entry;
 
     if (!ctx) {
         return ACVP_NO_CTX;
@@ -1325,15 +1647,15 @@ ACVP_RESULT acvp_process_tests (ACVP_CTX *ctx) {
 
     /*
      * Iterate through the VS identifiers the server sent to us
-     * in the regisration response.  Process each vector set and
+     * in the test session register response.  Process each vector set and
      * return the results to the server.
      */
-    vs_entry = ctx->vs_list;
+    vs_entry = ctx->vsid_url_list;
     if (!vs_entry) {
         return ACVP_MISSING_ARG;
     }
     while (vs_entry) {
-        rv = acvp_process_vsid(ctx, vs_entry->vs_id);
+        rv = acvp_process_vsid(ctx, vs_entry->name);
         vs_entry = vs_entry->next;
     }
 
@@ -1367,30 +1689,12 @@ static ACVP_RESULT acvp_retry_handler (ACVP_CTX *ctx, unsigned int retry_period)
  */
 ACVP_RESULT acvp_check_test_results (ACVP_CTX *ctx) {
     ACVP_RESULT rv = ACVP_SUCCESS;
-    ACVP_VS_LIST *vs_entry;
-
     if (!ctx) {
         return ACVP_NO_CTX;
     }
-
-    /*
-     * Iterate through the VS identifiers the server sent to us
-     * in the regisration response.  Attempt to download the result
-     * for each vector set.
-     */
-    vs_entry = ctx->vs_list;
-    if (!vs_entry) {
-        return ACVP_MISSING_ARG;
-    }
-    while (vs_entry) {
-        rv = acvp_get_result_vsid(ctx, vs_entry->vs_id);
-        if (ctx->is_sample) {
-            rv = acvp_retrieve_sample_answers(ctx, vs_entry->vs_id);
-        }
-        vs_entry = vs_entry->next;
-    }
-
-    return (rv);
+    
+    rv = acvp_get_result_test_session(ctx, ctx->session_url);
+    return rv;
 }
 
 
@@ -1452,11 +1756,11 @@ ACVP_RESULT acvp_refresh (ACVP_CTX *ctx)
  *	d) Generate the response data
  *	e) Send the response data back to the ACVP server
  */
-static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, int vs_id) {
-    ACVP_RESULT rv;
-    JSON_Value *val;
+static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, char *vsid_url) {
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    JSON_Value *val = NULL;
     JSON_Object *obj = NULL;
-    char *json_buf;
+    char *json_buf = NULL;
     int retry = 1;
 
     //TODO: do we want to limit the number of retries?
@@ -1464,9 +1768,9 @@ static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, int vs_id) {
         /*
          * Get the KAT vector set
          */
-        rv = acvp_retrieve_vector_set(ctx, vs_id);
+        rv = acvp_retrieve_vector_set(ctx, vsid_url);
         if (rv != ACVP_SUCCESS) {
-            return (rv);
+            goto end;
         }
         json_buf = ctx->kat_buf;
         if (ctx->debug == ACVP_LOG_LVL_VERBOSE) {
@@ -1477,10 +1781,11 @@ static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, int vs_id) {
         val = json_parse_string_with_comments(json_buf);
         if (!val) {
             ACVP_LOG_ERR("JSON parse error");
-            return ACVP_JSON_ERR;
+            rv = ACVP_JSON_ERR;
+            goto end;
         }
         obj = acvp_get_obj_from_rsp(val);
-        ctx->vs_id = vs_id;
+        ctx->vsid_url = vsid_url;
 
         /*
          * Check if we received a retry response
@@ -1512,13 +1817,10 @@ static ACVP_RESULT acvp_process_vsid (ACVP_CTX *ctx, int vs_id) {
     /*
      * Send the responses to the ACVP server
      */
-    ACVP_LOG_STATUS("POST vector set response vsId: %d", vs_id);
+    ACVP_LOG_STATUS("POST vector set response vsId: %d", ctx->vs_id);
     rv = acvp_submit_vector_responses(ctx);
-    if (rv != ACVP_SUCCESS) {
-        return (rv);
-    }
-
-    return ACVP_SUCCESS;
+end:
+    return rv;
 }
 
 /*
@@ -1533,6 +1835,7 @@ static ACVP_RESULT acvp_dispatch_vector_set (ACVP_CTX *ctx, JSON_Object *obj) {
     const char *mode = json_object_get_string(obj, "mode");
     const char *dir = json_object_get_string(obj, "direction");
     int vs_id = json_object_get_number(obj, "vsId");
+    ctx->vs_id = vs_id;
     ACVP_RESULT rv;
     
     if (!alg) {
@@ -1540,7 +1843,7 @@ static ACVP_RESULT acvp_dispatch_vector_set (ACVP_CTX *ctx, JSON_Object *obj) {
         return ACVP_JSON_ERR;
     }
     
-    ACVP_LOG_STATUS("vsId: %d", vs_id);
+    ACVP_LOG_STATUS("vs: %d", vs_id);
     ACVP_LOG_STATUS("ACV Operation: %s", alg);
     // TODO: make sure this is included where relevant only
     ACVP_LOG_INFO("ACV Direction: %s", dir);
@@ -1588,36 +1891,36 @@ static ACVP_RESULT acvp_process_vector_set (ACVP_CTX *ctx, JSON_Object *obj) {
     }
 
     ACVP_LOG_STATUS("Successfully processed KAT vector set");
-
     return ACVP_SUCCESS;
 
 }
 
-
 /*
  * This function will get the test results for a single KAT vector set.
  */
-static ACVP_RESULT acvp_get_result_vsid (ACVP_CTX *ctx, int vs_id) {
-    ACVP_RESULT rv;
-    JSON_Value *val;
+static ACVP_RESULT acvp_get_result_test_session (ACVP_CTX *ctx, char *session_url) {
+    ACVP_RESULT rv = ACVP_SUCCESS;
+    JSON_Value *val = NULL;
     JSON_Object *obj = NULL;
-    char *json_buf;
-    int retry = 1;
-
+    char *json_buf = NULL;
+    int retry = 1, count = 0, i, passed;
+    JSON_Array *results = NULL;
+    JSON_Object *current = NULL;
+    
     while (retry) {
         /*
          * Get the KAT vector set
          */
-        rv = acvp_retrieve_vector_set_result(ctx, vs_id);
+        rv = acvp_retrieve_result(ctx, session_url);
         if (rv != ACVP_SUCCESS) {
-            return (rv);
+            goto end;
         }
-        json_buf = ctx->kat_buf;
-
+        json_buf = ctx->test_sess_buf;
+    
         if (ctx->debug == ACVP_LOG_LVL_VERBOSE) {
-            printf("\n%s\n", ctx->kat_buf);
+            printf("%s\n", ctx->test_sess_buf);
         } else {
-            ACVP_LOG_ERR("%s", ctx->kat_buf);
+            ACVP_LOG_ERR("%s", ctx->test_sess_buf);
         }
         val = json_parse_string_with_comments(json_buf);
         if (!val) {
@@ -1625,37 +1928,57 @@ static ACVP_RESULT acvp_get_result_vsid (ACVP_CTX *ctx, int vs_id) {
             return ACVP_JSON_ERR;
         }
         obj = acvp_get_obj_from_rsp(val);
-        ctx->vs_id = vs_id;
-
-        /*
-         * Check if we received a retry response
-         */
-        unsigned int retry_period = json_object_get_number(obj, "retry");
-        if (retry_period) {
-            rv = acvp_retry_handler(ctx, retry_period);
-        } else {
-            /*
-             * Parse the JSON response from the server, if the vector set failed,
-             * then pull out the reason code and log it.
-             */
-            //TODO
+    
+        results = json_object_get_array(obj, "results");
+        count = (int) json_array_get_count(results);
+    
+        passed = json_object_get_boolean(obj, "passed");
+        if (passed) {
+            ACVP_LOG_STATUS("Passed all vectors in test session");
+            goto end;
         }
-        json_value_free(val);
-
+        
         /*
-         * Check if we need to retry the download because
-         * the KAT values were not ready
+         * If we didn't pass all the vector sets, it could be because of
+         * a failure or the disposition being incomplete
          */
-        if (ACVP_KAT_DOWNLOAD_RETRY == rv) {
-            retry = 1;
-        } else if (rv != ACVP_SUCCESS) {
-            return (rv);
-        } else {
-            retry = 0;
+        for (i = 0; i < count; i++) {
+            if (current) json_value_free((JSON_Value *)current);
+            current = json_array_get_object(results, i);
+            if (!strncmp(json_object_get_string(current, "status"), "incomplete", 10)) {
+                rv = acvp_retry_handler(ctx, 30);
+                if (ACVP_KAT_DOWNLOAD_RETRY == rv) {
+                    retry = 1;
+                } else if (rv != ACVP_SUCCESS) {
+                    goto end;
+                } else {
+                    retry = 0;
+                }
+                break;
+            } else {
+                retry = 0;
+                if (!strncmp(json_object_get_string(current, "status"), "fail", 4)) {
+                    ACVP_LOG_STATUS("Getting more details on failed vector set...");
+                    rv = acvp_retrieve_result(ctx, (char *) json_object_get_string(current, "vectorSetUrl"));
+                    if (rv != ACVP_SUCCESS) {
+                        goto end;
+                    }
+                    json_buf = ctx->test_sess_buf;
+    
+                    if (ctx->debug == ACVP_LOG_LVL_VERBOSE) {
+                        printf("%s\n", ctx->test_sess_buf);
+                    } else {
+                        ACVP_LOG_ERR("%s", ctx->test_sess_buf);
+                    }
+                }
+            }
         }
     }
+    
+    ACVP_LOG_STATUS("Received all dispositions for test session");
 
-    return ACVP_SUCCESS;
+end:
+    return rv;
 }
 
 char *acvp_version (void)

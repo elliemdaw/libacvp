@@ -460,10 +460,10 @@ ACVP_RESULT acvp_aes_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
     int j, t_cnt;
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
+    JSON_Array *r_tarr = NULL, *r_garr = NULL; /* Response testarray, grouparray */
     JSON_Array *res_tarr = NULL; /* Response resultsArray */
-    JSON_Value *r_tval = NULL; /* Response testval */
-    JSON_Object *r_tobj = NULL; /* Response testobj */
+    JSON_Value *r_tval = NULL, *r_gval = NULL; /* Response testval, groupval */
+    JSON_Object *r_tobj = NULL, *r_gobj = NULL; /* Response testobj, groupobj */
     ACVP_CAPS_LIST *cap;
     ACVP_SYM_CIPHER_TC stc;
     ACVP_TEST_CASE tc;
@@ -521,8 +521,11 @@ ACVP_RESULT acvp_aes_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
     r_vs = json_value_get_object(r_vs_val);
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     g_cnt = json_array_get_count(groups);
@@ -530,6 +533,7 @@ ACVP_RESULT acvp_aes_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
         const char *test_type_str = NULL, *dir_str = NULL, *kwcipher_str = NULL,
                    *iv_gen_str = NULL, *iv_gen_mode_str = NULL;
         unsigned int keylen = 0, ivlen = 0, ptlen = 0, aadlen = 0, taglen = 0;
+        int tgId = 0;
         ACVP_SYM_CIPH_DIR dir = 0;
         ACVP_SYM_CIPH_TESTTYPE test_type = 0;
         ACVP_SYM_KW_MODE kwcipher = 0;
@@ -538,6 +542,21 @@ ACVP_RESULT acvp_aes_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
 
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         dir_str = json_object_get_string(groupobj, "direction");
         if (!dir_str) {
@@ -898,6 +917,7 @@ ACVP_RESULT acvp_aes_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
             /* Append the test response value to array */
             json_array_append_value(r_tarr, r_tval);
         }
+        json_array_append_value(r_garr, r_gval);
     }
     json_array_append_value(reg_arry, r_vs_val);
 
@@ -993,14 +1013,14 @@ static ACVP_RESULT acvp_aes_output_tc (ACVP_CTX *ctx, ACVP_SYM_CIPHER_TC *stc,
     } else {
         if ((stc->cipher == ACVP_AES_GCM || stc->cipher == ACVP_AES_CCM) &&
             (opt_rv == ACVP_CRYPTO_TAG_FAIL)) {
-            json_object_set_boolean(tc_rsp, "decryptFail", 1);
+            json_object_set_boolean(tc_rsp, "testPassed", 1);
             free(tmp);
             return ACVP_SUCCESS;
         }
 
         if ((stc->cipher == ACVP_AES_KW || stc->cipher == ACVP_AES_KWP) &&
             (opt_rv == ACVP_CRYPTO_WRAP_FAIL)) {
-            json_object_set_boolean(tc_rsp, "decryptFail", 1);
+            json_object_set_boolean(tc_rsp, "testPassed", 1);
             free(tmp);
             return ACVP_SUCCESS;
         }

@@ -49,6 +49,10 @@ extern "C"
 #define ACVP_BYTE_LEN_CMAC_AES256 32
 #define ACVP_BYTE_LEN_CMAC_TDES 24
 
+/*! @enum ACVP_LOG_LVL
+ * @brief This enum defines the different log levels for
+ * the ACVP client library
+ */
 typedef enum acvp_log_lvl {
     ACVP_LOG_LVL_NONE = 0,
     ACVP_LOG_LVL_ERR,
@@ -57,6 +61,23 @@ typedef enum acvp_log_lvl {
     ACVP_LOG_LVL_INFO,
     ACVP_LOG_LVL_VERBOSE,
 } ACVP_LOG_LVL;
+
+/*! @struct ACVP_KV_LIST
+ * @brief This struct is a list of key/value pairs
+ * to be added to flexible JSON objects during registration
+ *
+ * For example, dependencies can have different key/value
+ * pairs depending on their type, so if the attributes are
+ * added to this list, then the list can get translated into
+ * proper JSON during dependency registration.
+ */
+typedef struct acvp_kv_list_t {
+    char *key;
+    char *value;
+    struct acvp_kv_list_t *next;
+} ACVP_KV_LIST;
+
+void acvp_free_kv_list (ACVP_KV_LIST **kv_list);
 
 /*! @struct ACVP_CTX
  *  @brief This opaque structure is used to maintain the state of a test session
@@ -2328,10 +2349,32 @@ ACVP_RESULT acvp_enable_kdf135_ikev2_cap_param (ACVP_CTX *ctx,
                                                 ACVP_KDF135_IKEV2_PARM param,
                                                 int value);
 
+/*! @brief acvp_enable_kdf135_ikev1_cap_param() allows an application to specify
+        operational parameters to be used during a test session with the ACVP
+        server.
+        
+    @param ctx Address of pointer to a previously allocated ACVP_CTX.
+    @param param ACVP_KDF135_IKEV1_PARM enum specifying parameter to enable.
+            Here it is ACVP_KDF_HASH_ALG or ACVP_KDF_IKEv1_AUTH_METHOD. Other
+            params should be enabled with acvp_enable_kdf135_ikev1_domain_param
+    @param value String value for parameter
+    
+    @return ACVP_RESULT
+*/
 ACVP_RESULT acvp_enable_kdf135_ikev1_cap_param (ACVP_CTX *ctx,
                                                 ACVP_KDF135_IKEV1_PARM param,
                                                 int value);
 
+/*! @brief acvp_enable_kdf135_ikev2_cap_len_param() allows an application to specify
+        operational lengths to be used during a test session with the ACVP
+        server.
+        
+    @param ctx Address of pointer to a previously allocated ACVP_CTX.
+    @param param ACVP_KDF135_IKEV2_PARM enum specifying parameter to enable.
+    @param value length
+    
+    @return ACVP_RESULT
+*/
 ACVP_RESULT acvp_enable_kdf135_ikev2_cap_len_param (ACVP_CTX *ctx,
                                                     ACVP_KDF135_IKEV2_PARM param,
                                                     int value);
@@ -2357,12 +2400,43 @@ ACVP_RESULT acvp_enable_kdf135_ikev2_domain_param (ACVP_CTX *ctx,
                                                    int max,
                                                    int increment);
 
+/*! @brief acvp_enable_kdf135_ikev1_domain_param() allows an application to specify
+        operational parameters to be used during a test session with the ACVP
+        server.
+
+        This function should be called after acvp_enable_kdf135_ikev1_cap() to
+        specify the parameters for the corresponding KDF.
+
+   @param ctx Address of pointer to a previously allocated ACVP_CTX.
+   @param param ACVP_KDF135_IKEV1_PARM enum value identifying the IKEv1 parameter
+   @param min integer minimum for domain parameter
+   @param max integer maximum for domain parameter
+   @param increment integer increment for domain parameter
+
+   @return ACVP_RESULT
+ */
 ACVP_RESULT acvp_enable_kdf135_ikev1_domain_param (ACVP_CTX *ctx,
                                                    ACVP_KDF135_IKEV1_PARM param,
                                                    int min,
                                                    int max,
                                                    int increment);
 
+/*! @brief acvp_enable_kdf108_domain_param() allows an application to specify
+        operational parameters to be used during a test session with the ACVP
+        server.
+
+        This function should be called after acvp_enable_kdf108_cap() to
+        specify the parameters for the corresponding KDF.
+
+   @param ctx Address of pointer to a previously allocated ACVP_CTX.
+   @param param ACVP_KDF108_MODE enum value identifying the KDF108 mode
+   @param param ACVP_KDF108_PARM enum value identifying the KDF108 parameter
+   @param min integer minimum for domain parameter
+   @param max integer maximum for domain parameter
+   @param increment integer increment for domain parameter
+
+   @return ACVP_RESULT
+ */
 ACVP_RESULT acvp_enable_kdf108_domain_param (ACVP_CTX *ctx,
                                              ACVP_KDF108_MODE mode,
                                              ACVP_KDF108_PARM param,
@@ -2456,6 +2530,24 @@ ACVP_RESULT acvp_set_server (ACVP_CTX *ctx, char *server_name, int port);
     @return ACVP_RESULT
  */
 ACVP_RESULT acvp_set_path_segment (ACVP_CTX *ctx, char *path_segment);
+
+/*! @brief acvp_set_api_context() specifies the URI prefix used by
+       the ACVP server.
+
+    Some ACVP servers use a context string in the URI for the path to
+    the REST interface.  Calling this function allows the API context
+    prefix to be specified.  The value provided to this function is
+    prepended to the path segment of the URI used for the ACVP
+    REST calls.
+
+    @param ctx Pointer to ACVP_CTX that was previously created by
+        calling acvp_create_test_session.
+    @param api_context Value to embed in the URI path after the server name and
+       before the ACVP well-known path.
+
+    @return ACVP_RESULT
+ */
+ACVP_RESULT acvp_set_api_context (ACVP_CTX *ctx, char *api_context);
 
 /*! @brief acvp_set_cacerts() specifies PEM encoded certificates to use
        as the root trust anchors for establishing the TLS session with
@@ -2587,6 +2679,17 @@ ACVP_RESULT acvp_set_module_info (ACVP_CTX *ctx,
                                   const char *module_version,
                                   const char *module_description);
 
+/*! @brief acvp_add_oe_dependency() adds a list of key/value pairs for
+ * a flexible json OE dependency
+ * @param ctx
+ * @param oe_name
+ * @param key_val_list
+ * @return ACVP_RESULT
+ */
+ACVP_RESULT acvp_add_oe_dependency (ACVP_CTX *ctx,
+                                    const char *oe_name,
+                                    ACVP_KV_LIST *key_val_list);
+
 /*! @brief acvp_check_test_results() allows the application to fetch vector
         set results from the server during a test session.
 
@@ -2609,8 +2712,24 @@ ACVP_RESULT acvp_check_test_results (ACVP_CTX *ctx);
  */
 ACVP_RESULT acvp_set_2fa_callback (ACVP_CTX *ctx, ACVP_RESULT (*totp_cb) (char **token));
 
+/*! @brief acvp_bin_to_hexstr() Converts a binary string to hex
+
+    @param src Pointer to the binary source string
+    @param src_len Length of source sting in bytes
+    @param dest Length of destination hex string
+    @param dest_max Maximum length allowed for destination
+    @return ACVP_RESULT
+ */
 ACVP_RESULT acvp_bin_to_hexstr (const unsigned char *src, int src_len, char *dest, int dest_max);
 
+/*! @brief acvp_hexstr_to_bin() Converts a hex string to binary
+
+    @param src Pointer to the hex source string
+    @param src_len Length of source sting in bytes
+    @param dest Length of destination binary string
+    @param dest_max Maximum length allowed for destination
+    @return ACVP_RESULT
+ */
 ACVP_RESULT acvp_hexstr_to_bin (const char *src, unsigned char *dest, int dest_max, int *converted_len);
 
 /*! @brief acvp_lookup_error_string() is a utility that
@@ -2623,10 +2742,23 @@ ACVP_RESULT acvp_hexstr_to_bin (const char *src, unsigned char *dest, int dest_m
  */
 char *acvp_lookup_error_string (ACVP_RESULT rv);
 
+/*! @brief acvp_cleanup() extends the curl_global_cleanup
+ * function to applications using libacvp to perform
+ * cleanup of curl resources
+ *
+ */
 ACVP_RESULT acvp_cleanup (ACVP_CTX *ctx);
 
+/*! @brief acvp_version() fetch the library version string
+ *
+ * @return (char *) library string, formatted like: libacvp-1.0.0
+ */
 char *acvp_version (void);
 
+/*! @brief acvp_protocol_version() fetch the protocol version string
+ *
+ * @return (char *) protocol version, formated like: 0.5
+ */
 char *acvp_protocol_version (void);
 
 #ifdef __cplusplus

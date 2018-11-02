@@ -295,18 +295,18 @@ static ACVP_RESULT acvp_kas_ecc_release_tc (ACVP_KAS_ECC_TC *stc) {
 
 static ACVP_RESULT acvp_kas_ecc_cdh(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TEST_CASE *tc,
                                     ACVP_KAS_ECC_TC *stc, JSON_Object *obj, int mode, 
-                                    JSON_Array *r_tarr)
+                                    JSON_Array *r_garr)
 {
     JSON_Value *groupval;
     JSON_Object *groupobj = NULL;
     JSON_Array *groups;
     JSON_Value *testval;
     JSON_Object *testobj = NULL;
-    JSON_Array *tests;
-    JSON_Value *r_tval = NULL; /* Response testval */
-    JSON_Object *r_tobj = NULL; /* Response testobj */
+    JSON_Array *tests, *r_tarr = NULL;
+    JSON_Value *r_tval = NULL, *r_gval = NULL; /* Response testval, groupval */
+    JSON_Object *r_tobj = NULL, *r_gobj = NULL; /* Response testobj, groupobj */
     unsigned int i, g_cnt;
-    int j, t_cnt, tc_id;
+    int j, t_cnt, tc_id, tgId = 0;
     ACVP_RESULT rv;
 
     groups = json_object_get_array(obj, "testGroups");
@@ -319,6 +319,21 @@ static ACVP_RESULT acvp_kas_ecc_cdh(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TES
 
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         curve_str = json_object_get_string(groupobj, "curve");
         if (!curve_str) {
@@ -453,22 +468,23 @@ static ACVP_RESULT acvp_kas_ecc_cdh(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TES
             /* Append the test response value to array */
             json_array_append_value(r_tarr, r_tval);
         }
+        json_array_append_value(r_garr, r_gval);
     }
     return ACVP_SUCCESS;
 }
 
 static ACVP_RESULT acvp_kas_ecc_comp(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TEST_CASE *tc,
                                      ACVP_KAS_ECC_TC *stc, JSON_Object *obj, int mode, 
-                                     JSON_Array *r_tarr)
+                                     JSON_Array *r_garr)
 {
     JSON_Value *groupval;
     JSON_Object *groupobj = NULL;
     JSON_Array *groups;
     JSON_Value *testval;
     JSON_Object *testobj = NULL;
-    JSON_Array *tests;
-    JSON_Value *r_tval = NULL; /* Response testval */
-    JSON_Object *r_tobj = NULL; /* Response testobj */
+    JSON_Array *tests, *r_tarr = NULL;
+    JSON_Value *r_tval = NULL, *r_gval = NULL; /* Response testval, groupval */
+    JSON_Object *r_tobj = NULL, *r_gobj = NULL; /* Response testobj, groupobj */
     unsigned int i, g_cnt;
     int j, t_cnt, tc_id;
     ACVP_RESULT rv;
@@ -477,6 +493,7 @@ static ACVP_RESULT acvp_kas_ecc_comp(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TE
     g_cnt = json_array_get_count(groups);
 
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         ACVP_KAS_ECC_TEST_TYPE test_type = 0;
         ACVP_HASH_ALG hash = 0;
         ACVP_ECDSA_CURVE curve = 0;
@@ -484,6 +501,21 @@ static ACVP_RESULT acvp_kas_ecc_comp(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TE
 
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         curve_str = json_object_get_string(groupobj, "curve");
         if (!curve_str) {
@@ -691,6 +723,7 @@ static ACVP_RESULT acvp_kas_ecc_comp(ACVP_CTX *ctx, ACVP_CAPS_LIST *cap, ACVP_TE
             /* Append the test response value to array */
             json_array_append_value(r_tarr, r_tval);
         }
+        json_array_append_value(r_garr, r_gval);
     }
     return ACVP_SUCCESS;
 }
@@ -699,7 +732,7 @@ ACVP_RESULT acvp_kas_ecc_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
 
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
+    JSON_Array *r_garr = NULL; /* Response grouparray */
     JSON_Value *reg_arry_val = NULL;
     JSON_Array *reg_arry = NULL;
     JSON_Object *reg_obj = NULL;
@@ -754,8 +787,11 @@ ACVP_RESULT acvp_kas_ecc_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
 
     mode_str = json_object_get_string(obj, "mode");
     json_object_set_string(r_vs, "mode", mode_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     if (mode_str) {
         if (!strncmp(mode_str, "CDH-Component", 13)) {
@@ -782,7 +818,7 @@ ACVP_RESULT acvp_kas_ecc_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
             ACVP_LOG_ERR("ACVP server requesting unsupported capability");
             return (ACVP_UNSUPPORTED_OP);
         }
-        rv = acvp_kas_ecc_cdh(ctx, cap, &tc, &stc, obj, mode, r_tarr);
+        rv = acvp_kas_ecc_cdh(ctx, cap, &tc, &stc, obj, mode, r_garr);
         if (rv != ACVP_SUCCESS) return rv;
         break;
 
@@ -792,7 +828,7 @@ ACVP_RESULT acvp_kas_ecc_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
             ACVP_LOG_ERR("ACVP server requesting unsupported capability");
             return ACVP_UNSUPPORTED_OP;
         }
-        rv = acvp_kas_ecc_comp(ctx, cap, &tc, &stc, obj, mode, r_tarr);
+        rv = acvp_kas_ecc_comp(ctx, cap, &tc, &stc, obj, mode, r_garr);
         if (rv != ACVP_SUCCESS) return rv;
         break;
 

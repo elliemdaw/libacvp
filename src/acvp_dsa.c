@@ -687,7 +687,6 @@ ACVP_RESULT acvp_dsa_keygen_handler (ACVP_CTX *ctx, ACVP_TEST_CASE tc, ACVP_CAPS
     /* Append the test response value to array */
     json_array_append_value(r_tarr, r_tval);
     return rv;
-    return ACVP_SUCCESS;
 }
 
 ACVP_RESULT acvp_dsa_pqggen_handler (ACVP_CTX *ctx, ACVP_TEST_CASE tc, ACVP_CAPS_LIST *cap,
@@ -1332,9 +1331,9 @@ ACVP_RESULT acvp_dsa_pqgver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
     JSON_Array *r_tarr = NULL; /* Response testarray */
-    JSON_Value *reg_arry_val = NULL;
-    JSON_Array *reg_arry = NULL;
-    JSON_Object *reg_obj = NULL;
+    JSON_Value *reg_arry_val = NULL, *r_gval = NULL;
+    JSON_Array *reg_arry = NULL, *r_garr = NULL;
+    JSON_Object *reg_obj = NULL, *r_gobj = NULL;
     JSON_Array *groups;
     ACVP_CAPS_LIST *cap;
     ACVP_DSA_TC stc;
@@ -1388,8 +1387,11 @@ ACVP_RESULT acvp_dsa_pqgver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     if (!groups) {
@@ -1401,8 +1403,24 @@ ACVP_RESULT acvp_dsa_pqgver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     stc.cipher = alg_id;
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         stc.mode = ACVP_DSA_MODE_PQGVER;
 
@@ -1412,6 +1430,7 @@ ACVP_RESULT acvp_dsa_pqgver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
         if (rv != ACVP_SUCCESS) {
             return (rv);
         }
+        json_array_append_value(r_garr, r_gval);
     }
     memset(&stc, 0x0, sizeof(ACVP_DSA_TC));
     json_array_append_value(reg_arry, r_vs_val);
@@ -1436,10 +1455,10 @@ ACVP_RESULT acvp_dsa_pqggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
     JSON_Object *groupobj = NULL;
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
-    JSON_Value *reg_arry_val = NULL;
+    JSON_Array *r_tarr = NULL, *r_garr = NULL; /* Response testarray, grouparray */
+    JSON_Value *reg_arry_val = NULL, *r_gval = NULL;
     JSON_Array *reg_arry = NULL;
-    JSON_Object *reg_obj = NULL;
+    JSON_Object *reg_obj = NULL, *r_gobj = NULL;
     JSON_Array *groups;
     ACVP_CAPS_LIST *cap;
     ACVP_DSA_TC stc;
@@ -1493,8 +1512,11 @@ ACVP_RESULT acvp_dsa_pqggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
 
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     if (!groups) {
@@ -1505,8 +1527,24 @@ ACVP_RESULT acvp_dsa_pqggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
 
     stc.cipher = alg_id;
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         stc.mode = ACVP_DSA_MODE_PQGGEN;
 
@@ -1516,6 +1554,7 @@ ACVP_RESULT acvp_dsa_pqggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj) {
          if (rv != ACVP_SUCCESS) {
             return (rv);
          }
+        json_array_append_value(r_garr, r_gval);
     }
 
     memset(&stc, 0x0, sizeof(ACVP_DSA_TC));
@@ -1537,10 +1576,10 @@ ACVP_RESULT acvp_dsa_siggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
     JSON_Object *groupobj = NULL;
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
-    JSON_Value *reg_arry_val = NULL;
+    JSON_Array *r_tarr = NULL, *r_garr = NULL; /* Response testarray, grouparray */
+    JSON_Value *reg_arry_val = NULL, *r_gval = NULL;
     JSON_Array *reg_arry = NULL;
-    JSON_Object *reg_obj = NULL;
+    JSON_Object *reg_obj = NULL, *r_gobj = NULL;
     JSON_Array *groups;
     ACVP_CAPS_LIST *cap;
     ACVP_DSA_TC stc;
@@ -1594,8 +1633,11 @@ ACVP_RESULT acvp_dsa_siggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     if (!groups) {
@@ -1606,8 +1648,24 @@ ACVP_RESULT acvp_dsa_siggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     stc.cipher = alg_id;
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         stc.mode = ACVP_DSA_MODE_SIGGEN;
 
@@ -1617,6 +1675,7 @@ ACVP_RESULT acvp_dsa_siggen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
         if (rv != ACVP_SUCCESS) {
             return (rv);
         }
+        json_array_append_value(r_garr, r_gval);
     }
 
     memset(&stc, 0x0, sizeof(ACVP_DSA_TC));
@@ -1640,10 +1699,10 @@ ACVP_RESULT acvp_dsa_keygen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
     JSON_Object *groupobj = NULL;
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
-    JSON_Value *reg_arry_val = NULL;
+    JSON_Array *r_tarr = NULL, *r_garr = NULL; /* Response testarray, grouparray */
+    JSON_Value *reg_arry_val = NULL, *r_gval = NULL;
     JSON_Array *reg_arry = NULL;
-    JSON_Object *reg_obj = NULL;
+    JSON_Object *reg_obj = NULL, *r_gobj = NULL;
     JSON_Array *groups;
     ACVP_CAPS_LIST *cap;
     ACVP_DSA_TC stc;
@@ -1697,8 +1756,11 @@ ACVP_RESULT acvp_dsa_keygen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     if (!groups) {
@@ -1709,8 +1771,24 @@ ACVP_RESULT acvp_dsa_keygen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     stc.cipher = alg_id;
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         stc.mode = ACVP_DSA_MODE_KEYGEN;
 
@@ -1720,6 +1798,7 @@ ACVP_RESULT acvp_dsa_keygen_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
         if (rv != ACVP_SUCCESS) {
             return (rv);
         }
+        json_array_append_value(r_garr, r_gval);
     }
 
     memset(&stc, 0x0, sizeof(ACVP_DSA_TC));
@@ -1743,10 +1822,10 @@ ACVP_RESULT acvp_dsa_sigver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
     JSON_Object *groupobj = NULL;
     JSON_Value *r_vs_val = NULL;
     JSON_Object *r_vs = NULL;
-    JSON_Array *r_tarr = NULL; /* Response testarray */
-    JSON_Value *reg_arry_val = NULL;
+    JSON_Array *r_tarr = NULL, *r_garr = NULL; /* Response testarray, grouparray */
+    JSON_Value *reg_arry_val = NULL, *r_gval = NULL;
     JSON_Array *reg_arry = NULL;
-    JSON_Object *reg_obj = NULL;
+    JSON_Object *reg_obj = NULL, *r_gobj = NULL;
     JSON_Array *groups;
     ACVP_CAPS_LIST *cap;
     ACVP_DSA_TC stc;
@@ -1800,8 +1879,11 @@ ACVP_RESULT acvp_dsa_sigver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     json_object_set_number(r_vs, "vsId", ctx->vs_id);
     json_object_set_string(r_vs, "algorithm", alg_str);
-    json_object_set_value(r_vs, "testResults", json_value_init_array());
-    r_tarr = json_object_get_array(r_vs, "testResults");
+    /*
+     * create an array of response test groups
+     */
+    json_object_set_value(r_vs, "testGroups", json_value_init_array());
+    r_garr = json_object_get_array(r_vs, "testGroups");
 
     groups = json_object_get_array(obj, "testGroups");
     if (!groups) {
@@ -1812,8 +1894,24 @@ ACVP_RESULT acvp_dsa_sigver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
 
     stc.cipher = alg_id;
     for (i = 0; i < g_cnt; i++) {
+        int tgId = 0;
         groupval = json_array_get_value(groups, i);
         groupobj = json_value_get_object(groupval);
+    
+        /*
+         * Create a new group in the response with the tgid
+         * and an array of tests
+         */
+        r_gval = json_value_init_object();
+        r_gobj = json_value_get_object(r_gval);
+        tgId = json_object_get_number(groupobj, "tgId");
+        if (!tgId) {
+            ACVP_LOG_ERR("Missing tgid from server JSON groub obj");
+            return ACVP_MALFORMED_JSON;
+        }
+        json_object_set_number(r_gobj, "tgId", tgId);
+        json_object_set_value(r_gobj, "tests", json_value_init_array());
+        r_tarr = json_object_get_array(r_gobj, "tests");
 
         stc.mode = ACVP_DSA_MODE_SIGVER;
 
@@ -1823,6 +1921,7 @@ ACVP_RESULT acvp_dsa_sigver_kat_handler (ACVP_CTX *ctx, JSON_Object *obj)
         if (rv != ACVP_SUCCESS) {
             return (rv);
         }
+        json_array_append_value(r_garr, r_gval);
     }
 
     memset(&stc, 0x0, sizeof(ACVP_DSA_TC));
